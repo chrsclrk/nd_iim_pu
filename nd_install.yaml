@@ -1,0 +1,212 @@
+---
+- name: RHEL 7 install just completed, now install IBM WebSphere Application Server Network Deployment.
+  hosts: all
+  gather_facts: no
+  vars:
+    shbx_iim_dir_loc: "{{ ( shbx.fs_root, shbx.dir, shbx.iim_dir, ) | join('/') }}"
+    shbx_imm_instllr: "{{ ( shbx.fs_root, 
+                        shbx.dir, 
+                        shbx.iim_dir, 
+                        shbx.ctrl_host_iim | basename, ) | join('/') }}"
+    imcl: "{{ '/'.join((ibm.fs_root, iim.dir, iim.install_loc, 'eclipse/tools/imcl')) }}"
+  tasks:
+  - import_role:
+      name: common
+
+  - name: "Add groups as pre-req for creating users{{':'}} iimgrp, ndgrp."
+    group:
+      state: present
+      name: "{{ item }}"
+    loop:
+      - ibmgrp
+      - iimgrp
+      - ndgrp
+      - shbx
+  
+  - name: "Add users as pre-req for creating file system directories{{':'}} ibmusr."
+    user:
+      state: present
+      name:  "{{ ibm.usr }}"
+      group: "{{ ibm.grp }}"
+
+  - name: "Add users as pre-req for creating file system directories{{':'}} iimusr."
+    user:
+      state: present
+      name:  "{{ iim.usr }}"
+      group: "{{ iim.grp }}"
+      groups: "{{ iim.grps }}"
+  - authorized_key:
+      user: "{{ iim.usr }}"
+      state: present
+      key: "{{ iim.key }}"
+
+  - name: "Add users as pre-req for creating file system directories{{':'}} ndusr."
+    # https://docs.ansible.com/ansible/latest/modules/user_module.html
+    user:
+      state: present
+      name:  "{{ nd.usr }}"
+      group: "{{ nd.grp }}"
+      groups: "{{ nd.grps }}"
+  - authorized_key:
+      user: "{{ nd.usr }}"
+      state: present
+      key: "{{ nd.key }}"
+
+  - name: Add IBM directory to /opt with owner "ibmusr".
+    # https://docs.ansible.com/ansible/latest/modules/file_module.html#file-module
+    file:
+      state: directory
+      owner: "{{ ibm.usr }}"
+      group: "{{ ibm.grp }}"
+      mode:  "{{ ibm.mode }}"
+      path:  "{{ ibm.fs_root }}"
+
+  - name: "Add {{ iim.tmp_fs }} directory with owner {{ iim.usr }}."
+    file:
+      state: directory
+      owner: "{{ iim.usr }}"
+      group: "{{ iim.grp }}"
+      mode:  "{{ iim.mode }}"
+      path:  "{{ iim.tmp_fs }}"
+  
+  - name: "{{ shbx_iim_dir_loc }}{{':'}} add directory."
+    file:
+      state: directory
+      owner: "{{ shbx.usr }}"
+      group: "{{ shbx.grp }}"
+      mode:  "{{ shbx.mode }}"
+      path:  "{{ shbx_iim_dir_loc }}"
+
+  # - name: "Install handy RHEL packages. {{'#'}}TODO Investigate availability of Red Hat Satellite Server for other environments."
+  #   yum:
+  #     name: "{{ item }}"
+  #     state: present
+  #   loop:
+  #     - unzip 
+  #     - tree
+  #     - lsof
+
+  - name: From Ansible control_machine scp the "imcl" installer sourced from IBM Fix Central.
+    copy:
+      owner: virtuser
+      group: shbx
+      src: "{{ shbx.ctrl_host_iim }}"
+      dest: "{{ shbx_imm_instllr }}"
+
+  - name: Unarchive IIM install file.
+    become: yes
+    become_user: "{{ iim.usr }}"
+    unarchive:
+      remote_src: yes
+      src:  "{{ shbx_imm_instllr }}"
+      dest: "{{ iim.tmp_fs }}"
+
+  - name: "Tidy up{{':'}} {{ shbx_imm_instllr }} state changed to \"absent\"."
+    file:
+      path: "{{ shbx_imm_instllr }}" 
+      state: absent
+
+  - name: "Command {{ '/'.join((iim.tmp_fs, 'groupinstc')) }} for IIM install."
+    # https://docs.ansible.com/ansible/latest/modules/command_module.html#command-module
+    # https://docs.ansible.com/ansible/latest/user_guide/become.html
+    # https://www.ibm.com/support/knowledgecenter/SSDV2W_1.8.5/com.ibm.silentinstall12.doc/topics/r_install_cmd.html 
+    # https://www-01.ibm.com/support/docview.wss?uid=swg21692402
+    become: yes
+    become_user: "{{ iim.usr }}"
+    command:
+      argv:
+      - "{{ '/'.join((iim.tmp_fs, 'groupinstc')) }}"
+      - "-accessRights" 
+      - "group"
+      - "-installationDirectory"
+      - "{{ '/'.join((ibm.fs_root, iim.dir, iim.install_loc)) }}" #https://www-01.ibm.com/support/docview.wss?uid=swg21692402
+      - "-dataLocation"
+      - "{{ '/'.join((ibm.fs_root, iim.dir, iim.data_loc)) }}"    #https://www-01.ibm.com/support/docview.wss?uid=swg21692402
+      - "-acceptLicense"
+    register: rgstr_grpinstc
+    # tags: iim_groupcinstc
+  - name: Ansible register veriable displayed from the previous task.
+    debug:
+      var: rgstr_grpinstc
+
+  - name: "Validate \"imcl\" is in place with {{ imcl }} version."
+    command:   
+      argv:
+      - "{{ imcl }}"
+      - "version"
+    register: rgstr_imcl_vrsn
+    tags: iim_groupcinstc
+  - name: Ansible register veriable displayed from the previous task.
+    debug:
+      var: rgstr_imcl_vrsn.stdout
+    tags: iim_groupcinstc
+
+  - name: Avoid IIM imcl looking events. "imcl version" is run to assure ".fileTableLock" is in place.
+    file: 
+      path: "{{ '/'.join((ibm.fs_root, iim.dir, iim.install_loc, 
+                          'eclipse/configuration')) }}"
+      mode: 0777
+      recurse: yes
+    register: rgstr_filelock
+    tags: iim_groupcinstc
+  - name: Ansible register veriable displayed from the previous task.
+    debug:
+      var: rgstr_filelock
+    tags: iim_groupcinstc
+  
+  - name: "Validate \"imcl\" ND install readiness with \"listAvailablePackages\" from HTTP repoistory created with PUCL."
+    become: yes
+    become_user: "{{ iim.usr }}"
+    command:
+      argv:
+      - "{{ imcl }}"
+      - "listAvailablePackages"
+      - "-repositories" 
+      - "{{ pucl.http_rpstry }}"
+    register: rgstr_imcl_lstAvlPckg
+    tags: iim_groupcinstc
+  - name: Ansible register veriable displayed from the previous task.
+    debug:
+      var: rgstr_imcl_lstAvlPckg.stdout
+    tags: iim_groupcinstc
+
+  - name: "Tidy up{{':'}} {{ iim.tmp_fs }} state changed to \"absent\"."
+    file:
+      path: "{{ iim.tmp_fs }}" 
+      state: absent
+
+  - name: "{{ imcl }}{{':'}} install ND."
+    # https://www.ibm.com/support/knowledgecenter/en/SSAW57_9.0.0/com.ibm.websphere.installation.nd.doc/ae/tins_installation_cl.html
+    become: yes
+    become_user: "{{ iim.usr }}"
+    command:
+      argv:
+      - "{{ imcl }}"
+      - "install"
+      - "com.ibm.websphere.ND.v90,samples"
+      - "com.ibm.java.jdk.v8"
+      - "-repositories"
+      - "{{ pucl.http_rpstry }}"
+      - "-installationDirectory"
+      - "{{ '/'.join((ibm.fs_root, nd.dir_ND)) }}"
+      - "-installFixes"
+      - "none"
+      - "-preferences" 
+      - "com.ibm.cic.common.core.preferences.keepFetchedFiles=false,com.ibm.cic.common.core.preferences.preserveDownloadedArtifacts=false"
+      - "-preferences"
+      - "com.ibm.cic.common.core.preferences.searchForUpdates=false"
+      - "-acceptLicense"
+    register: rgstr_nd_instl
+    tags: nd_install
+  - name: Ansible register veriable displayed from the previous task.
+    debug:
+      var: rgstr_nd_instl
+    tags: nd_install
+
+  - name: "Validate ND install{{':'}} {{ ( ibm.fs_root, nd.dir_ND,'bin/versionInfo.sh', ) | join('/') }}"
+    command: "{{ ( ibm.fs_root, nd.dir_ND,'bin/versionInfo.sh', ) | join('/') }}"
+    register: rgstr_verInfo
+  - name: Ansible register veriable displayed from the previous task.
+    debug:
+      var: rgstr_verInfo.stdout
+...

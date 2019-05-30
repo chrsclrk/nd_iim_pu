@@ -1,0 +1,384 @@
+---
+- name: RHEL 7 install just completed, now install IBM's Installation Manager, then Packaging Utility.
+  hosts: all
+  gather_facts: no
+  vars:
+    shbx_iim_dir_loc: "{{ ( shbx.fs_root, shbx.dir, shbx.iim_dir, ) | join('/') }}"
+    shbx_imm_instllr: "{{ ( shbx.fs_root, 
+                        shbx.dir, 
+                        shbx.iim_dir, 
+                        shbx.ctrl_host_iim | basename, ) | join('/') }}"
+    imcl: "{{ '/'.join((ibm.fs_root, iim.dir, iim.install_loc, 'eclipse/tools/imcl')) }}"
+    imutilsc: "{{ '/'.join((ibm.fs_root, iim.dir, iim.install_loc, 'eclipse/tools/imutilsc')) }}"
+    flnm_pfx: "{{ ''.join(('/home', '/', iim.usr, '/')) }}"
+    flnm_sfx: "{{ ''.join(('_', lookup('pipe', 'date +%y%m%d-%H%M'), '.txt')) }}" # file name suffix
+    pkgutl_root: "{{ ( shbx.fs_root, shbx.dir) | join('/') }}"
+    pkgutl_leaf: PkgUtl
+    pkgutl_ntwrk_rpstry: "{{ ( pkgutl_root, pkgutl_leaf, ) | join('/') }}"
+    pucl: "{{ ( ibm.fs_root, pkgutl.dir, pkgutl.install_loc, 'PUCL', ) | join('/') }}"
+    ibm_pkgs: []
+
+  tasks:
+  - import_role:
+      name: common
+
+  - name: "Add groups as pre-req for creating users{{':'}} iimgrp, ndgrp."
+    group:
+      state: present
+      name: "{{ item }}"
+    loop:
+      - ibmgrp
+      - iimgrp
+      - shbx
+  
+  - name: "Add users as pre-req for creating file system directories{{':'}} ibmusr."
+    user:
+      state: present
+      name:  "{{ ibm.usr }}"
+      group: "{{ ibm.grp }}"
+
+  - name: "Add users as pre-req for creating file system directories{{':'}} iimusr."
+    user:
+      state: present
+      name:  "{{ iim.usr }}"
+      group: "{{ iim.grp }}"
+      groups: "{{ iim.grps }}"
+  - authorized_key:
+      user: "{{ iim.usr }}"
+      state: present
+      key: "{{ iim.key }}"
+
+  # - name: "Add users as pre-req for creating file system directories{{':'}} ndusr."
+  #   # https://docs.ansible.com/ansible/latest/modules/user_module.html
+  #   user:
+  #     state: present
+  #     name:  "{{ nd.usr }}"
+  #     group: "{{ nd.grp }}"
+  #     groups: "{{ nd.grps }}"
+  # - authorized_key:
+  #     user: "{{ nd.usr }}"
+  #     state: present
+  #     key: "{{ nd.key }}"
+
+  - name: Add IBM directory to /opt with owner "ibmusr".
+    # https://docs.ansible.com/ansible/latest/modules/file_module.html#file-module
+    file:
+      state: directory
+      owner: "{{ ibm.usr }}"
+      group: "{{ ibm.grp }}"
+      mode:  "{{ ibm.mode }}"
+      path:  "{{ ibm.fs_root }}"
+
+  - name: "Add {{ iim.tmp_fs }} directory with owner {{ iim.usr }}."
+    file:
+      state: directory
+      owner: "{{ iim.usr }}"
+      group: "{{ iim.grp }}"
+      mode:  "{{ iim.mode }}"
+      path:  "{{ iim.tmp_fs }}"
+  
+  - name: "{{ shbx_iim_dir_loc }}{{':'}} add directory."
+    file:
+      state: directory
+      owner: "{{ shbx.usr }}"
+      group: "{{ shbx.grp }}"
+      mode:  "{{ shbx.mode }}"
+      path:  "{{ shbx_iim_dir_loc }}"
+
+  - name: "Install handy RHEL packages. {{'#'}}TODO Investigate availability of Red Hat Satellite Server for other environments."
+    yum:
+      name: "{{ item }}"
+      state: present
+    loop:
+      - unzip 
+      # - tree
+      # - lsof
+
+  - name: From Ansible control_machine scp the "imcl" installer sourced from IBM Fix Central.
+    copy:
+      owner: virtuser
+      group: shbx
+      src: "{{ shbx.ctrl_host_iim }}"
+      dest: "{{ shbx_imm_instllr }}"
+
+  - name: Unarchive IIM install file.
+    become: yes
+    become_user: "{{ iim.usr }}"
+    unarchive:
+      remote_src: yes
+      src:  "{{ shbx_imm_instllr }}"
+      dest: "{{ iim.tmp_fs }}"
+
+  - name: "Tidy up{{':'}} {{ shbx_imm_instllr }} state changed to \"absent\"."
+    file:
+      path: "{{ shbx_imm_instllr }}" 
+      state: absent
+
+  - name: "Command {{ '/'.join((iim.tmp_fs, 'groupinstc')) }} for IIM install."
+    # https://docs.ansible.com/ansible/latest/modules/command_module.html#command-module
+    # https://docs.ansible.com/ansible/latest/user_guide/become.html
+    # https://www.ibm.com/support/knowledgecenter/SSDV2W_1.8.5/com.ibm.silentinstall12.doc/topics/r_install_cmd.html 
+    # https://www-01.ibm.com/support/docview.wss?uid=swg21692402
+    become: yes
+    become_user: "{{ iim.usr }}"
+    command:
+      argv:
+      - "{{ '/'.join((iim.tmp_fs, 'groupinstc')) }}"
+      - "-accessRights" 
+      - "group"
+      - "-installationDirectory"
+      - "{{ '/'.join((ibm.fs_root, iim.dir, iim.install_loc)) }}" #https://www-01.ibm.com/support/docview.wss?uid=swg21692402
+      - "-dataLocation"
+      - "{{ '/'.join((ibm.fs_root, iim.dir, iim.data_loc)) }}"    #https://www-01.ibm.com/support/docview.wss?uid=swg21692402
+      - "-acceptLicense"
+    register: rgstr_grpinstc
+    # tags: iim_groupcinstc
+  - name: Ansible register veriable displayed from the previous task.
+    debug:
+      var: rgstr_grpinstc
+
+  - name: "Validate \"imcl\" is in place with {{ imcl }} version."
+    command:   
+      argv:
+      - "{{ imcl }}"
+      - "version"
+    register: rgstr_imcl_vrsn
+    tags: iim_groupcinstc
+  - name: Ansible register veriable displayed from the previous task.
+    debug:
+      var: rgstr_imcl_vrsn.stdout
+    tags: iim_groupcinstc
+
+  - name: Avoid IIM imcl looking events. "imcl version" is run to assure ".fileTableLock" is in place.
+    file: 
+      path: "{{ '/'.join((ibm.fs_root, iim.dir, iim.install_loc, 
+                          'eclipse/configuration')) }}"
+      mode: 0777
+      recurse: yes
+    register: rgstr_filelock
+    tags: iim_groupcinstc
+  - name: Ansible register veriable displayed from the previous task.
+    debug:
+      var: rgstr_filelock
+    tags: iim_groupcinstc
+
+  - name: Create "master password file" to provide a passphrase. (Ansible Vault candidate.)
+    become: yes
+    become_user: "{{ iim.usr }}"
+    copy:
+      dest: "{{ '/'.join(('/home', iim.usr, iim.ibmid.file)) }}"
+      content: ansible
+      mode: 0600
+
+  - name: "{{ imutilsc }} saveCredential."
+    become: yes
+    become_user: "{{ iim.usr }}"
+    command:
+      argv: 
+      - "{{ imutilsc }}"
+      - "saveCredential"
+      - "-url"
+      - "http://www.ibm.com/software/repositorymanager/com.ibm.cic.packagingUtility/repository.config"
+      - "-userName"
+      - "{{ iim.ibmid.email }}"
+      - "-userPassword"
+      - "{{ iim.ibmid.pw }}"
+      - "-secureStorageFile"
+      - "{{ '/'.join(('/home', iim.usr, iim.secureStorageFile)) }}"
+      - "-masterPasswordFile" 
+      - "{{ '/'.join(('/home', iim.usr, iim.ibmid.file)) }}"
+    register: rgstr_saveCredential
+  - debug:
+      var: rgstr_saveCredential.stdout
+
+  - name: "{{ imcl }} install \"com.ibm.cic.packagingUtility\" from IBM host."
+    become: yes
+    become_user: "{{ iim.usr }}"
+    command:
+      argv:
+      - "{{ imcl }}" 
+      - "install"
+      - "com.ibm.cic.packagingUtility"
+      - "-repositories"
+      - "http://www.ibm.com/software/repositorymanager/com.ibm.cic.packagingUtility"
+      - "-secureStorageFile"
+      - "{{ '/'.join(('/home', iim.usr, iim.secureStorageFile)) }}"
+      - "-masterPasswordFile"
+      - "{{ '/'.join(('/home', iim.usr, iim.ibmid.file)) }}" 
+      - "-accessRights"
+      - "group"
+      - "-installationDirectory"
+      - "{{ '/'.join((ibm.fs_root, pkgutl.dir, pkgutl.install_loc)) }}" #https://www-01.ibm.com/support/docview.wss?uid=swg21692402
+      - "-dataLocation"
+      - "{{ '/'.join((ibm.fs_root, pkgutl.dir, pkgutl.data_loc)) }}" 
+      - "-sharedResourcesDirectory"
+      - "{{ '/'.join((ibm.fs_root, iim.dir, iim.srd_loc)) }}"
+      - "-acceptLicense"
+    register: rgstr_pkgutl
+  - name: Ansible register veriable displayed from the previous task.    
+    debug:
+      var: rgstr_pkgutl
+
+  - name: Validate Packaging Utility install with command "PUCL listAvailablePackages -showVerboseProgress".
+    become: yes
+    become_user: "{{ iim.usr }}"
+    command:
+      argv:
+      - "{{ pucl }}"
+      - "listAvailablePackages"
+      - "-showVerboseProgress"
+    register: rgstr_pucl_vld
+  - name: Ansible register veriable displayed from the previous task.
+    debug:
+      var: rgstr_pucl_vld.stdout
+
+  - name: "{{ pucl }} -long{{':'}} provided one or more URLs to listAvailablePackages hosted by IBM."
+    become: yes
+    become_user: "{{ iim.usr }}"
+    command:
+      argv:
+      - "{{ pucl }}"
+      - "listAvailablePackages"
+      - "-repositories"
+      - "{{ item.url }}"
+      - "-long"
+      - "-secureStorageFile"
+      - "{{ '/'.join(('/home', iim.usr, iim.secureStorageFile)) }}"
+      - "-masterPasswordFile"
+      - "{{ '/'.join(('/home', iim.usr, iim.ibmid.file)) }}"
+      - "-preferences"
+      - "{{ ( 'com.ibm.cic.common.core.preferences.connectTimeout',
+              pucl.time_out, ) | join('=') }}"
+    loop:
+      - ooi: was9_ilan  # object of interest
+        url: https://www.ibm.com/software/repositorymanager/com.ibm.websphere.ILAN.v90
+      - ooi: isa
+        url: https://www.ibm.com/software/repositorymanager/com.ibm.isa.offerings.v5
+      - ooi: was9_ipla
+        url:  http://www.ibm.com/software/repositorymanager/V9WASND
+    register: rgstr_pucl
+
+  - name: "{{ flnm_pfx }} <object_of_interest>  {{ flnm_sfx }} report of IM repositories provided by IBM."
+    copy:
+      owner: "{{ iim.usr }}"
+      group: "{{ iim.grp }}"
+      content: "{{ rpt.stdout }}"
+      dest: "{{ ''.join((flnm_pfx, rpt.item.ooi, flnm_sfx))  }}"
+    loop: "{{ rgstr_pucl.results }}"
+    loop_control:
+      loop_var: rpt
+      label: "{{ rpt.item.ooi }}"
+
+  - name: Validate report files, just created, are in place.
+    shell: "ls -lt {{ '/'.join(('/home', iim.usr)) }} | rev | column --table | rev"
+    register: rgstr_rpt_fls
+  - name: stdout value from the data structure "rgstr_rpt_fls".
+    debug:
+      msg: "{{ rgstr_rpt_fls.stdout_lines }}"
+
+  - name: Fetch Java package name.
+    shell: "grep 'jdk.*8.0.5.35' $(ls -1t *ipla* | head -n 1) | cut -d' ' -f3"
+    args:
+      chdir: "{{ flnm_pfx }}"
+    register: rgstr_jdk
+  - name: "stdout{{':'}} register of previous task."
+    debug:
+      msg: "{{ rgstr_jdk.stdout }}"
+  - name: Fetch ND packages names.
+    shell: "grep '9.0.0.11' $(ls -1t *ipla* | head -n 1) | cut -d' ' -f3 | grep -e 'IHS' -e 'ND\\.' -e 'PLG'"
+    args:
+      chdir: "{{ flnm_pfx }}"
+    register: rgstr_nd
+  - name: "stdout{{':'}} register of previous task."
+    debug:
+      msg: "{{ rgstr_nd.stdout }}"
+  - name: Fetch ISA packages names.
+    shell: "grep '5.0.2.20180827' $(ls -1t *isa* | head -n 1) | cut -d' ' -f3"
+    args:
+      chdir: "{{ flnm_pfx }}"
+    register: rgstr_isa
+  - name: "stdout{{':'}} register of previous task."
+    debug:
+      msg: "{{ rgstr_isa.stdout }}"
+
+  - name: Append catagory package names to the variable ibm_pkgs, type list.
+    set_fact:
+      ibm_pkgs: "{{ ibm_pkgs }} + {{ item }}"
+    loop:
+      - "{{ rgstr_jdk.stdout_lines }}"
+      - "{{ rgstr_nd.stdout_lines }}"
+      - "{{ rgstr_isa.stdout_lines }}"
+  - name: Build a IIM repository with these packages hosted by IBM.
+    debug:
+      msg: "{{ ibm_pkgs }}"
+  
+  - name: "Create the PkgUtl Network Repository target directory{{':'}} {{ pkgutl_ntwrk_rpstry }}."
+    become: yes
+    become_user: "{{ iim.usr }}"  
+    file:
+      path: "{{ pkgutl_ntwrk_rpstry }}"
+      state: directory
+      mode: "0774"
+    register: rgstr_pucl_target_before_copy
+  - name: "register of previous task."
+    debug:
+      msg: "{{ rgstr_pucl_target_before_copy }}"
+
+  - set_fact: 
+      cmd_du_dir: "{{ pkgutl_ntwrk_rpstry }}"
+    tags: again
+  - name: "{{ pkgutl_ntwrk_rpstry }}{{':'}} file system space consumed before \"PUCL copy\"."
+    shell: "{{ lookup('template', 'roles/common/templates/cmd_du.j2') }}"
+    register: rgstr_tmpl
+    tags: 
+    - again
+  - name: "stdout{{':'}} register of previous task."
+    debug:
+      var: rgstr_tmpl.stdout
+    tags: 
+    - again
+
+  - name: "PUCL{{':'}} copy from IBM hosted repositories packages in the local variable \"ibm_pkgs\"."
+    become: yes
+    become_user: "{{ iim.usr }}"
+    command:
+      argv:
+      - "{{ pucl }}"
+      - "copy"
+      - "{{ item }}"
+      - "-platform"
+      - "os=linux,arch=x86_64"
+      - "-repositories"
+      - "{{ ','.join(('http://www.ibm.com/software/repositorymanager/V9WASND',
+                      'https://www.ibm.com/software/repositorymanager/com.ibm.isa.offerings.v5')) }}"
+      - "-target"
+      - "{{ pkgutl_ntwrk_rpstry }}"
+      - "-secureStorageFile"
+      - "{{ '/'.join(('/home', iim.usr, iim.secureStorageFile)) }}"
+      - "-masterPasswordFile"
+      - "{{ '/'.join(('/home', iim.usr, iim.ibmid.file)) }}"       
+      - "-preferences"
+      - "com.ibm.cic.common.core.preferences.connectTimeout=10"
+      - "-acceptLicense"
+      # - "-preview"
+    loop: "{{ ibm_pkgs }}"
+    register: rgstr_pucl_copy
+    tags: 
+    - again
+  - name: "stdout{{':'}} register of previous task."
+    debug:
+      var: rgstr_pucl_copy
+    tags: 
+    - again
+
+  - name: "{{ pkgutl_ntwrk_rpstry }}{{':'}} file system space consumed after \"PUCL copy\"."
+    shell: "{{ lookup('template', 'roles/common/templates/cmd_du.j2') }}"
+    register: rgstr_tmpl
+    tags: 
+    - again
+  - name: "stdout{{':'}} register of previous task."
+    debug:
+      var: rgstr_tmpl.stdout
+    tags: 
+    - again
+...
