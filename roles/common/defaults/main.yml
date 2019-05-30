@@ -1,0 +1,70 @@
+---
+# “Ansible Doc” > “User Guide” > “Working with Playbooks” > “Using Variables”:
+# https://docs.ansible.com/ansible/latest/user_guide/playbooks_variables.html 
+ibm:
+  grp: ibmgrp
+  usr: ibmusr
+  # grps: iimgrp,ndgrp,shbx
+  key: "{{ lookup('file', '/Users/mbp7/.ssh/c6k.pub') }}"
+  mode: u=rwx,g=rwx,o=r
+  fs_root: /opt/IBM
+iim:
+  grp: iimgrp
+  usr: iimusr
+  grps:   shbx, ibmgrp
+  key: "{{ lookup('file', '/Users/mbp7/.ssh/c6k.pub') }}"
+  mode: u=rwx,g=rwx,o=r
+  zip_path: /opt/shbx/iim_FixCentral/agent.installer.linux.gtk.x86_64_1.8.9003.20190204_1751.zip
+  tmp_fs: /tmp/iim
+  dir: IIM
+  data_loc: dataLocation
+  install_loc: installLocation
+  srd_loc: SRD # sharedResourcesDirectory
+  secureStorageFile: secureStorageFile
+  ibmid:
+    email: "cclark@ztech.io"
+    pw: rome95Tty
+    file: passphrase.txt
+  # imcl: "{{ '/'.join((ibm.fs_root, iim.dir, iim.install_loc, 'eclipse/tools/imcl')) }}"
+nd:
+  grp: ndgrp
+  usr: ndusr
+  grps: iimgrp,ibmgrp
+  key: "{{ lookup('file', '/Users/mbp7/.ssh/c6k.pub') }}"
+  mode: u=rwx,g=rwx,o=r
+  fs_root: /opt/IBM/ND
+  dir_nd: nd
+  dir_ND: ND
+  pkgutl_http: http://172.16.106.13:54301/repository.config
+pkgutl:
+  dir: "PkgUtil" # This string is quoted to avoid a Python name collision.
+  data_loc: dataLocation
+  install_loc: installLocation
+  srd_loc: SRD
+shbx:
+  fs_root: /opt
+  dir: shbx
+  iim_dir: iim_FixCentral
+  ctrl_host_iim: /Users/mbp7/Downloads/IBM_Fix-Central_IIM/agent.installer.linux.gtk.x86_64_1.8.9003.20190204_1751.zip
+  cntl_host_nd:   /Users/mbp7/Downloads/ibm_was/WAS_ND_V9.0_MP_ML.zip
+  trgt_host_nd:   /opt/shbx/CJ441EN_nd9/WAS_ND_V9.0_MP_ML.zip
+  cntl_host_ndjv: /Users/mbp7/Downloads/ibm_was/sdk.repo.8030.java8.linux.zip
+  trgt_host_ndjv: /opt/shbx/CJ441EN_nd9/sdk.repo.8030.java8.linux.zip
+  usr: virtuser
+  grp: shbx
+  mode: u=rwx,g=rwx,o=r
+  # iim_dir_loc: "{{ ( shbx.fs_root, shbx.dir, shbx.iim_dir, ) | join('/') }}"
+  # iim_zip_loc: "{{ ( shbx.fs_root, 
+  #                     shbx.dir, 
+  #                     shbx.iim_dir, 
+  #                     shbx.ctrl_host_iim | basename, ) | join('/') }}"
+# cmpst_rpstry:
+# ntwrk_rpstry:
+#   url: http://172.16.106.13:54301/repository.config 
+#   duration: 30  # number of seconds
+pucl:
+  trgt_dir: "{{ '_'.join(('PUCL',  lookup('pipe', 'date +%y%m%d-%H%M'))) }}"
+  http_rpstry: http://172.16.106.13:54301/repository.config
+  time_out: 10
+  http_rpstry_hst: 172.16.106.13
+...
