@@ -23,7 +23,7 @@ iim:
   secureStorageFile: secureStorageFile
   ibmid:
     email: "cclark@ztech.io"
-    pw: rome95Tty
+    pw: <your_value_here>
     file: passphrase.txt
   # imcl: "{{ '/'.join((ibm.fs_root, iim.dir, iim.install_loc, 'eclipse/tools/imcl')) }}"
 nd:
